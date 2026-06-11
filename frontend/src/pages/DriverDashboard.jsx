@@ -14,6 +14,15 @@ const DriverDashboard = () => {
   const [driverProfile, setDriverProfile] = useState(user);
   const [history, setHistory] = useState([]);
   const [fullHistory, setFullHistory] = useState([]);
+  const [watchId, setWatchId] = useState(null);
+
+  useEffect(() => {
+    return () => {
+      if (watchId !== null) {
+        navigator.geolocation.clearWatch(watchId);
+      }
+    };
+  }, [watchId]);
 
   useEffect(() => {
     const fetchData = async () => {
@@ -61,19 +70,53 @@ const DriverDashboard = () => {
   const toggleOnline = async () => {
     try {
       const config = { headers: { Authorization: `Bearer ${user.token}` } };
-      // Generate a mock location near IIT Roorkee if going online
-      const payload = { 
-        isOnline: !isOnline,
-        currentLocation: !isOnline ? {
-          lat: 29.8649 + (Math.random() - 0.5) * 0.02,
-          lng: 77.8966 + (Math.random() - 0.5) * 0.02
-        } : null
-      };
-      const res = await axios.put('http://localhost:5000/api/drivers/availability', payload, config);
-      setIsOnline(res.data.isOnline);
-      if (!res.data.isOnline) setRideRequests([]);
+      
+      if (!isOnline) {
+        if (!navigator.geolocation) {
+          alert("Geolocation is not supported by your browser");
+          return;
+        }
+
+        // Request continuous real GPS location from browser
+        const id = navigator.geolocation.watchPosition(
+          async (position) => {
+            const payload = {
+              isOnline: true,
+              currentLocation: {
+                lat: position.coords.latitude,
+                lng: position.coords.longitude
+              }
+            };
+            try {
+              const res = await axios.put('http://localhost:5000/api/drivers/availability', payload, config);
+              setIsOnline(res.data.isOnline);
+            } catch (err) {
+              console.error('Failed to update availability on the server');
+            }
+          },
+          (error) => {
+            console.error("Geolocation error:", error);
+          },
+          { enableHighAccuracy: true, timeout: 10000, maximumAge: 5000 }
+        );
+        setWatchId(id);
+      } else {
+        // Going offline
+        if (watchId !== null) {
+          navigator.geolocation.clearWatch(watchId);
+          setWatchId(null);
+        }
+        const payload = { 
+          isOnline: false,
+          currentLocation: null
+        };
+        const res = await axios.put('http://localhost:5000/api/drivers/availability', payload, config);
+        setIsOnline(res.data.isOnline);
+        setRideRequests([]);
+      }
     } catch (err) {
-      alert('Failed to update availability');
+      console.error(err);
+      alert('Failed to process availability change');
     }
   };
 

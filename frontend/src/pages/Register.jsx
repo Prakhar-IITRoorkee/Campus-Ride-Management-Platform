@@ -1,6 +1,7 @@
 import React, { useState, useContext } from 'react';
 import { AuthContext } from '../context/AuthContext';
 import { useNavigate, Link } from 'react-router-dom';
+import { GoogleLogin } from '@react-oauth/google';
 import './Auth.css';
 
 const Register = () => {
@@ -13,7 +14,7 @@ const Register = () => {
     plateNumber: ''
   });
   const [error, setError] = useState('');
-  const { register } = useContext(AuthContext);
+  const { register, loginWithGoogle } = useContext(AuthContext);
   const navigate = useNavigate();
 
   const handleChange = (e) => {
@@ -38,6 +39,16 @@ const Register = () => {
       navigate('/');
     } catch (err) {
       setError(err.response?.data?.message || 'Registration failed');
+    }
+  };
+
+  const handleGoogleSuccess = async (credentialResponse) => {
+    try {
+      // By default, we register Google users as passengers or drivers depending on the current form state
+      await loginWithGoogle(credentialResponse.credential, formData.role);
+      navigate('/');
+    } catch (err) {
+      setError('Google Sign-up failed');
     }
   };
 
@@ -87,6 +98,16 @@ const Register = () => {
 
           <button type="submit" className="primary-btn">Sign Up</button>
         </form>
+
+        <div style={{ margin: '20px 0', display: 'flex', justifyContent: 'center' }}>
+          <GoogleLogin
+            onSuccess={handleGoogleSuccess}
+            onError={() => setError('Google Login Failed')}
+            theme="filled_black"
+            text="signup_with"
+          />
+        </div>
+
         <p className="redirect-text">
           Already have an account? <Link to="/login">Log in</Link>
         </p>

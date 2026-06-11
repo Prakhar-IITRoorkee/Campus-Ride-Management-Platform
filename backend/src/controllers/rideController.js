@@ -6,8 +6,8 @@ exports.requestRide = async (req, res) => {
   try {
     const { pickup, destination, scheduledTime, isDaily } = req.body;
     
-    // Simulate simple distance-based fare calculation
-    const simulatedFare = Math.floor(Math.random() * 80) + 20;
+    // Flat fare of 10 rupees anywhere on campus
+    const simulatedFare = 10;
 
     let primaryRide;
     const io = getIO();

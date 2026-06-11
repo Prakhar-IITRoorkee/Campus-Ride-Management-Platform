@@ -4,7 +4,17 @@ import { SocketContext } from '../context/SocketContext';
 import axios from 'axios';
 import { MapPin, Navigation, LogOut, Clock, Star, CreditCard, Crosshair } from 'lucide-react';
 import { MapContainer, TileLayer, Marker, Popup, useMapEvents, Polyline } from 'react-leaflet';
+import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
+
+const rickshawIcon = new L.divIcon({
+  html: `<div style="width: 70px; height: 70px; filter: drop-shadow(2px 4px 6px rgba(0,0,0,0.4));">
+            <img src="/rickshaw_transparent.png" style="width: 100%; height: 100%; object-fit: contain;" />
+         </div>`,
+  className: 'custom-div-icon',
+  iconSize: [70, 70],
+  iconAnchor: [35, 35]
+});
 import { QRCodeSVG } from 'qrcode.react';
 
 // Location Selector Hook Component
@@ -204,6 +214,7 @@ const PassengerDashboard = () => {
   };
 
   const [showProfile, setShowProfile] = useState(false);
+  const [showProfileMenu, setShowProfileMenu] = useState(false);
   const [profileData, setProfileData] = useState({ name: user.name, email: user.email });
 
   const handleProfileUpdate = async (e) => {
@@ -219,20 +230,112 @@ const PassengerDashboard = () => {
   };
 
   return (
-    <div className="dashboard-container">
-      <div className="header">
-        <div>
-          <h1>Welcome, {user.name}</h1>
-          <p style={{ margin: 0, color: 'var(--text-muted)' }}>Passenger Dashboard</p>
-        </div>
-        <div>
-          <button className="btn btn-secondary" style={{marginRight: '10px'}} onClick={() => setShowProfile(true)}>Edit Profile</button>
-          <button className="btn btn-danger" onClick={logout}><LogOut size={16} style={{marginRight: 8, verticalAlign: 'middle'}} />Logout</button>
+    <>
+      {/* Top Navbar Strip */}
+      <div style={{ padding: '15px 30px', background: 'var(--bg-card)', borderBottom: '1px solid rgba(255,255,255,0.1)', display: 'flex', alignItems: 'center', justifyContent: 'space-between', zIndex: 1001, position: 'relative' }}>
+        <h2 style={{ margin: 0, color: 'var(--primary)', letterSpacing: '1px' }}>Company Name</h2>
+        
+        {/* Profile Button */}
+        <div style={{ position: 'relative' }}>
+          <div 
+            onClick={() => setShowProfileMenu(!showProfileMenu)}
+            style={{ width: '45px', height: '45px', borderRadius: '50%', background: 'var(--primary)', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', border: '2px solid rgba(255,255,255,0.2)' }}
+          >
+            <span style={{ fontSize: '18px', fontWeight: 'bold', color: 'white' }}>{user.name.charAt(0).toUpperCase()}</span>
+          </div>
+
+          {showProfileMenu && (
+            <div style={{ position: 'absolute', top: '55px', right: 0, background: 'var(--bg-card)', padding: '15px', borderRadius: '10px', boxShadow: '0 8px 24px rgba(0,0,0,0.8)', border: '1px solid rgba(255,255,255,0.1)', minWidth: '150px' }}>
+               <p style={{ margin: '0 0 10px 0', fontWeight: 'bold', textAlign: 'center' }}>{user.name}</p>
+               <button className="btn btn-secondary" style={{ width: '100%', marginBottom: '10px' }} onClick={() => { setShowProfileMenu(false); setShowProfile(true); }}>Edit Profile</button>
+               <button className="btn btn-danger" style={{ width: '100%' }} onClick={logout}><LogOut size={16} style={{marginRight: 8, verticalAlign: 'middle'}} />Logout</button>
+            </div>
+          )}
         </div>
       </div>
 
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px' }}>
-        <div className="card">
+      {/* 1. Full Bleed Map at the very top */}
+      <div style={{ position: 'relative', width: '100%', height: '500px', borderBottom: '1px solid rgba(255,255,255,0.05)', background: 'var(--bg-card)' }}>
+        
+
+
+        {selectingLocation && (
+             <div style={{position: 'absolute', top: '20px', left: '50%', transform: 'translateX(-50%)', zIndex: 1000, background: 'var(--warning)', color: '#000', padding: '10px 20px', borderRadius: '30px', fontWeight: 'bold', boxShadow: '0 4px 12px rgba(0,0,0,0.5)'}}>
+                Click map to select {selectingLocation}
+             </div>
+        )}
+
+        <MapContainer center={[29.8649, 77.8966]} zoom={14} style={{ height: '100%', width: '100%' }}>
+          <TileLayer url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" />
+          <LocationSelector 
+            selectingLocation={selectingLocation} 
+            setPickupCoords={setPickupCoords} 
+            setDestCoords={setDestCoords} 
+            setPickup={setPickup} 
+            setDestination={setDestination} 
+            setSelectingLocation={setSelectingLocation}
+          />
+          
+          {currentRide && (
+            <>
+              <Marker position={[currentRide.pickup.lat, currentRide.pickup.lng]}>
+                <Popup>Pickup: {currentRide.pickup.address}</Popup>
+              </Marker>
+              <Marker position={[currentRide.destination.lat, currentRide.destination.lng]}>
+                <Popup>Dropoff: {currentRide.destination.address}</Popup>
+              </Marker>
+              <Polyline 
+                positions={[
+                  [currentRide.pickup.lat, currentRide.pickup.lng],
+                  [currentRide.destination.lat, currentRide.destination.lng]
+                ]} 
+                color="var(--primary)" 
+                weight={4} 
+                opacity={0.7} 
+                dashArray="10, 10" 
+              />
+            </>
+          )}
+
+          {!currentRide && pickupCoords && (
+             <Marker position={[pickupCoords.lat, pickupCoords.lng]}>
+               <Popup>Selected Pickup</Popup>
+             </Marker>
+          )}
+          {!currentRide && destCoords && (
+             <Marker position={[destCoords.lat, destCoords.lng]}>
+               <Popup>Selected Destination</Popup>
+             </Marker>
+          )}
+          {!currentRide && pickupCoords && destCoords && (
+              <Polyline 
+                positions={[
+                  [pickupCoords.lat, pickupCoords.lng],
+                  [destCoords.lat, destCoords.lng]
+                ]} 
+                color="var(--warning)" 
+                weight={3} 
+                opacity={0.5} 
+                dashArray="5, 10" 
+              />
+          )}
+
+          {!currentRide && availableDrivers.map(d => d.currentLocation && (
+            <Marker key={d._id} position={[d.currentLocation.lat, d.currentLocation.lng]} icon={rickshawIcon}>
+                <Popup>
+                <strong>Available Driver: {d.name}</strong><br/>
+                Vehicle: {d.vehicle?.type} ({d.vehicle?.plateNumber})<br/>
+                Rating: {d.averageRating ? d.averageRating.toFixed(1) : 'New'} ⭐
+              </Popup>
+            </Marker>
+          ))}
+
+        </MapContainer>
+      </div>
+
+      <div className="dashboard-container">
+        {/* Request a Ride Section */}
+        <div className="card" style={{ marginTop: '20px' }}>
           <h2 style={{marginTop: 0, color: 'var(--primary)'}}><Navigation size={20} style={{marginRight: 8, verticalAlign: 'middle'}}/>Request a Ride</h2>
           
           {currentRide ? (
@@ -264,7 +367,6 @@ const PassengerDashboard = () => {
                       try {
                         const config = { headers: { Authorization: `Bearer ${user.token}` } };
                         await axios.put(`http://localhost:5000/api/rides/${currentRide._id}/status`, { status: 'Cancelled' }, config);
-                        // The socket will receive 'ride:updated' and clear currentRide automatically
                       } catch (err) {
                         alert("Failed to cancel ride");
                       }
@@ -277,128 +379,48 @@ const PassengerDashboard = () => {
             </div>
           ) : (
             <form onSubmit={handleRequestRide}>
-              <div className="form-group">
-                <label>Pickup Location</label>
-                <div style={{display: 'flex', alignItems: 'center', background: 'rgba(0,0,0,0.2)', borderRadius: '8px', border: '1px solid rgba(255,255,255,0.1)'}}>
-                  <MapPin size={20} style={{marginLeft: '10px', color: 'var(--text-muted)'}}/>
-                  <input type="text" value={pickup} onChange={(e) => setPickup(e.target.value)} required placeholder="Select on map or type" style={{border: 'none', background: 'transparent', flex: 1}}/>
-                  <button type="button" className={`btn ${selectingLocation === 'pickup' ? 'btn-success' : 'btn-secondary'}`} style={{padding: '5px 10px', margin: '5px'}} onClick={() => setSelectingLocation('pickup')}>
-                    <Crosshair size={16}/>
-                  </button>
-                </div>
-              </div>
-              <div className="form-group">
-                <label>Destination</label>
-                <div style={{display: 'flex', alignItems: 'center', background: 'rgba(0,0,0,0.2)', borderRadius: '8px', border: '1px solid rgba(255,255,255,0.1)'}}>
-                  <Navigation size={20} style={{marginLeft: '10px', color: 'var(--text-muted)'}}/>
-                  <input type="text" value={destination} onChange={(e) => setDestination(e.target.value)} required placeholder="Select on map or type" style={{border: 'none', background: 'transparent', flex: 1}}/>
-                  <button type="button" className={`btn ${selectingLocation === 'destination' ? 'btn-success' : 'btn-secondary'}`} style={{padding: '5px 10px', margin: '5px'}} onClick={() => setSelectingLocation('destination')}>
-                    <Crosshair size={16}/>
-                  </button>
-                </div>
-              </div>
-              <div className="form-group">
-                <label>Schedule Time (Optional)</label>
-                <div style={{display: 'flex', alignItems: 'center', background: 'rgba(0,0,0,0.2)', borderRadius: '8px', border: '1px solid rgba(255,255,255,0.1)'}}>
-                  <Clock size={20} style={{marginLeft: '10px', color: 'var(--text-muted)'}}/>
-                  <input type="datetime-local" value={scheduledTime} onChange={(e) => setScheduledTime(e.target.value)} style={{border: 'none', background: 'transparent'}}/>
-                </div>
-                {scheduledTime && (
-                  <div style={{marginTop: '10px', display: 'flex', alignItems: 'center'}}>
-                    <input type="checkbox" id="isDaily" checked={isDaily} onChange={(e) => setIsDaily(e.target.checked)} style={{marginRight: '8px', width: '16px', height: '16px'}} />
-                    <label htmlFor="isDaily" style={{fontSize: '14px', color: 'var(--warning)', margin: 0, cursor: 'pointer'}}>Make this a Daily ride (schedules next 5 days)</label>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '15px' }}>
+                <div className="form-group" style={{ marginBottom: 0 }}>
+                  <label>Pickup Location</label>
+                  <div style={{display: 'flex', alignItems: 'center', background: 'rgba(0,0,0,0.2)', borderRadius: '8px', border: '1px solid rgba(255,255,255,0.1)'}}>
+                    <MapPin size={20} style={{marginLeft: '10px', color: 'var(--text-muted)'}}/>
+                    <input type="text" value={pickup} onChange={(e) => setPickup(e.target.value)} required placeholder="Select on map or type" style={{border: 'none', background: 'transparent', flex: 1}}/>
+                    <button type="button" className={`btn ${selectingLocation === 'pickup' ? 'btn-success' : 'btn-secondary'}`} style={{padding: '5px 10px', margin: '5px'}} onClick={() => setSelectingLocation('pickup')}>
+                      <Crosshair size={16}/>
+                    </button>
                   </div>
-                )}
+                </div>
+                <div className="form-group" style={{ marginBottom: 0 }}>
+                  <label>Destination</label>
+                  <div style={{display: 'flex', alignItems: 'center', background: 'rgba(0,0,0,0.2)', borderRadius: '8px', border: '1px solid rgba(255,255,255,0.1)'}}>
+                    <Navigation size={20} style={{marginLeft: '10px', color: 'var(--text-muted)'}}/>
+                    <input type="text" value={destination} onChange={(e) => setDestination(e.target.value)} required placeholder="Select on map or type" style={{border: 'none', background: 'transparent', flex: 1}}/>
+                    <button type="button" className={`btn ${selectingLocation === 'destination' ? 'btn-success' : 'btn-secondary'}`} style={{padding: '5px 10px', margin: '5px'}} onClick={() => setSelectingLocation('destination')}>
+                      <Crosshair size={16}/>
+                    </button>
+                  </div>
+                </div>
+                <div className="form-group" style={{ marginBottom: 0 }}>
+                  <label>Schedule Time (Optional)</label>
+                  <div style={{display: 'flex', alignItems: 'center', background: 'rgba(0,0,0,0.2)', borderRadius: '8px', border: '1px solid rgba(255,255,255,0.1)'}}>
+                    <Clock size={20} style={{marginLeft: '10px', color: 'var(--text-muted)'}}/>
+                    <input type="datetime-local" value={scheduledTime} onChange={(e) => setScheduledTime(e.target.value)} style={{border: 'none', background: 'transparent'}}/>
+                  </div>
+                  {scheduledTime && (
+                    <div style={{marginTop: '10px', display: 'flex', alignItems: 'center'}}>
+                      <input type="checkbox" id="isDaily" checked={isDaily} onChange={(e) => setIsDaily(e.target.checked)} style={{marginRight: '8px', width: '16px', height: '16px'}} />
+                      <label htmlFor="isDaily" style={{fontSize: '14px', color: 'var(--warning)', margin: 0, cursor: 'pointer'}}>Make this a Daily ride (schedules next 5 days)</label>
+                    </div>
+                  )}
+                </div>
               </div>
-              <button type="submit" className="btn btn-primary" style={{width: '100%', marginTop: '10px'}} disabled={loading || !pickupCoords || !destCoords}>
+              <button type="submit" className="btn btn-primary" style={{width: '100%', marginTop: '15px'}} disabled={loading || !pickupCoords || !destCoords}>
                 {loading ? 'Requesting...' : 'Find a Driver'}
               </button>
             </form>
           )}
         </div>
-
-        <div className="card" style={{ position: 'relative' }}>
-          <h2 style={{marginTop: 0, color: 'var(--secondary)'}}>Live Map</h2>
-          {selectingLocation && (
-             <div style={{position: 'absolute', top: '10px', right: '10px', zIndex: 1000, background: 'var(--warning)', color: '#000', padding: '5px 10px', borderRadius: '5px', fontWeight: 'bold'}}>
-                Click map to select {selectingLocation}
-             </div>
-          )}
-          <div style={{ height: '350px', borderRadius: '10px', overflow: 'hidden' }}>
-            <MapContainer center={[29.8649, 77.8966]} zoom={15} style={{ height: '100%', width: '100%' }}>
-              <TileLayer url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" />
-              <LocationSelector 
-                selectingLocation={selectingLocation} 
-                setPickupCoords={setPickupCoords} 
-                setDestCoords={setDestCoords} 
-                setPickup={setPickup} 
-                setDestination={setDestination} 
-                setSelectingLocation={setSelectingLocation}
-              />
-              
-              {/* Show current ride markers & route */}
-              {currentRide && (
-                <>
-                  <Marker position={[currentRide.pickup.lat, currentRide.pickup.lng]}>
-                    <Popup>Pickup: {currentRide.pickup.address}</Popup>
-                  </Marker>
-                  <Marker position={[currentRide.destination.lat, currentRide.destination.lng]}>
-                    <Popup>Dropoff: {currentRide.destination.address}</Popup>
-                  </Marker>
-                  <Polyline 
-                    positions={[
-                      [currentRide.pickup.lat, currentRide.pickup.lng],
-                      [currentRide.destination.lat, currentRide.destination.lng]
-                    ]} 
-                    color="var(--primary)" 
-                    weight={4} 
-                    opacity={0.7} 
-                    dashArray="10, 10" 
-                  />
-                </>
-              )}
-
-              {/* Show draft markers & draft route while requesting */}
-              {!currentRide && pickupCoords && (
-                 <Marker position={[pickupCoords.lat, pickupCoords.lng]}>
-                   <Popup>Selected Pickup</Popup>
-                 </Marker>
-              )}
-              {!currentRide && destCoords && (
-                 <Marker position={[destCoords.lat, destCoords.lng]}>
-                   <Popup>Selected Destination</Popup>
-                 </Marker>
-              )}
-              {!currentRide && pickupCoords && destCoords && (
-                  <Polyline 
-                    positions={[
-                      [pickupCoords.lat, pickupCoords.lng],
-                      [destCoords.lat, destCoords.lng]
-                    ]} 
-                    color="var(--warning)" 
-                    weight={3} 
-                    opacity={0.5} 
-                    dashArray="5, 10" 
-                  />
-              )}
-
-              {/* Show available drivers */}
-              {!currentRide && availableDrivers.map(d => d.currentLocation && (
-                <Marker key={d._id} position={[d.currentLocation.lat, d.currentLocation.lng]}>
-                  <Popup>
-                    <strong>Available Driver: {d.name}</strong><br/>
-                    Vehicle: {d.vehicle?.type} ({d.vehicle?.plateNumber})<br/>
-                    Rating: {d.averageRating ? d.averageRating.toFixed(1) : 'New'} ⭐
-                  </Popup>
-                </Marker>
-              ))}
-
-            </MapContainer>
-          </div>
-        </div>
-      </div>
-
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 2fr', gap: '20px', marginTop: '20px' }}>
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 2fr', gap: '20px', marginTop: '20px' }}>
         {/* Upcoming Bookings */}
         <div className="card">
           <h2 style={{marginTop: 0, color: 'var(--secondary)'}}><Clock size={20} style={{marginRight: 8, verticalAlign: 'middle'}}/>Upcoming Bookings</h2>
@@ -533,7 +555,8 @@ const PassengerDashboard = () => {
           </div>
         </div>
       )}
-    </div>
+      </div>
+    </>
   );
 };
 
