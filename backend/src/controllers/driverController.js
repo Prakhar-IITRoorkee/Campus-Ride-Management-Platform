@@ -16,7 +16,6 @@ exports.updateAvailability = async (req, res) => {
       { new: true }
     ).select('-password');
 
-    // Broadcast driver availability update
     const io = getIO();
     io.emit('driver:availability', driver);
 

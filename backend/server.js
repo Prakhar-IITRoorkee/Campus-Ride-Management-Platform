@@ -10,7 +10,6 @@ dotenv.config();
 const app = express();
 const server = http.createServer(app);
 
-// Middleware
 app.use(cors());
 app.use(express.json());
 
@@ -31,13 +30,11 @@ const connectDB = async () => {
 
 connectDB();
 
-// Routes
 app.use('/api/auth', require('./src/routes/authRoutes'));
 app.use('/api/rides', require('./src/routes/rideRoutes'));
 app.use('/api/drivers', require('./src/routes/driverRoutes'));
 app.use('/api/payments', require('./src/routes/paymentRoutes'));
 
-// Socket.IO
 initSockets(server);
 
 process.on('uncaughtException', err => {

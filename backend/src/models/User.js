@@ -26,13 +26,13 @@ const userSchema = new mongoose.Schema({
     enum: ['passenger', 'driver'],
     required: true,
   },
-  // Driver specific fields
+
   vehicle: {
-    type: { type: String }, // e.g., 'e-rickshaw', 'car'
+    type: { type: String },
     plateNumber: { type: String },
   },
   verificationId: {
-    type: String // e.g., License or Student ID
+    type: String
   },
   isOnline: {
     type: Boolean,

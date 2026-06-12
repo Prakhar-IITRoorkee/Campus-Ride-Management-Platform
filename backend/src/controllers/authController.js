@@ -52,7 +52,15 @@ exports.loginUser = async (req, res) => {
     const { email, password } = req.body;
     const user = await User.findOne({ email });
 
-    if (user && (await bcrypt.compare(password, user.password))) {
+    if (!user) {
+      return res.status(401).json({ message: 'Invalid email or password' });
+    }
+
+    if (!user.password) {
+      return res.status(401).json({ message: 'This account uses Google Sign-In. Please sign in with Google.' });
+    }
+
+    if (await bcrypt.compare(password, user.password)) {
       res.json({
         _id: user._id,
         name: user.name,
@@ -102,7 +110,6 @@ exports.googleAuth = async (req, res) => {
     const { token, role } = req.body;
     let payload;
     
-    // In development without a real client ID, we decode the token to mock verification.
     if (process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_ID !== 'MOCK_CLIENT_ID') {
       const ticket = await client.verifyIdToken({
           idToken: token,

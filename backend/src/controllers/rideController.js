@@ -6,14 +6,12 @@ exports.requestRide = async (req, res) => {
   try {
     const { pickup, destination, scheduledTime, isDaily } = req.body;
     
-    // Flat fare of 10 rupees anywhere on campus
     const simulatedFare = 10;
 
     let primaryRide;
     const io = getIO();
 
     if (isDaily && scheduledTime) {
-      // Create 5 identical rides for the next 5 days
       const ridesToCreate = [];
       for (let i = 0; i < 5; i++) {
         const d = new Date(scheduledTime);
@@ -31,12 +29,10 @@ exports.requestRide = async (req, res) => {
       const createdRides = await Ride.insertMany(ridesToCreate);
       primaryRide = createdRides[0];
       
-      // Populate passenger info for drivers
       await primaryRide.populate('passengerId', 'name');
-      // We'll broadcast just the primary one or all of them depending on how we want drivers to see it
       io.to('drivers').emit('ride:requested', primaryRide);
       
-      return res.status(201).json(createdRides); // Return array to frontend
+      return res.status(201).json(createdRides);
     } else {
       primaryRide = await Ride.create({
         passengerId: req.user.id,
@@ -61,7 +57,6 @@ exports.acceptRide = async (req, res) => {
   try {
     const rideId = req.params.id;
     
-    // Atomically accept the ride if it is still 'Requested'
     const ride = await Ride.findOneAndUpdate(
       { _id: rideId, status: 'Requested' },
       { 
@@ -69,16 +64,14 @@ exports.acceptRide = async (req, res) => {
         driverId: req.user.id 
       },
       { new: true }
-    ).populate('passengerId driverId', 'name vehicle');
+    ).populate('passengerId driverId', 'name vehicle currentLocation');
 
     if (!ride) {
       return res.status(400).json({ message: 'Ride no longer available' });
     }
 
     const io = getIO();
-    // Notify the specific passenger
     io.to(ride.passengerId._id.toString()).emit('ride:accepted', ride);
-    // Notify all drivers to remove it from their requests list
     io.to('drivers').emit('ride:updated', ride);
 
     res.json(ride);
@@ -96,13 +89,12 @@ exports.updateRideStatus = async (req, res) => {
 
     ride.status = status;
     await ride.save();
-    await ride.populate('passengerId driverId', 'name vehicle');
+    await ride.populate('passengerId driverId', 'name vehicle currentLocation');
 
     const io = getIO();
     io.to(ride.passengerId._id.toString()).emit('ride:updated', ride);
 
     if (status === 'Completed') {
-      // Update counts
       await User.findByIdAndUpdate(ride.driverId, { $inc: { totalRides: 1 } });
       await User.findByIdAndUpdate(ride.passengerId, { $inc: { totalRides: 1 } });
     }
@@ -119,7 +111,7 @@ exports.getMyRides = async (req, res) => {
       ? { passengerId: req.user.id }
       : { driverId: req.user.id };
 
-    const rides = await Ride.find(query).sort('-createdAt').populate('passengerId driverId', 'name');
+    const rides = await Ride.find(query).sort('-createdAt').populate('passengerId driverId', 'name vehicle currentLocation');
     res.json(rides);
   } catch (error) {
     res.status(500).json({ message: error.message });
@@ -139,7 +131,6 @@ exports.rateRide = async (req, res) => {
     ride.feedback = feedback;
     await ride.save();
 
-    // Update driver average rating
     const driver = await User.findById(ride.driverId);
     const newTotal = driver.totalRatings + 1;
     const newAverage = ((driver.averageRating * driver.totalRatings) + rating) / newTotal;

@@ -1,37 +1,54 @@
-# Campus Mobility Platform - Design Document
+# Deliverable 2: Design Document
+
+**Project:** HopOn (IIT Roorkee Ride Management System)
+**Format:** PDF (Exported from Markdown)
+
+---
 
 ## 1. Problem Understanding
-Modern large campuses (like universities or tech parks) face challenges in intra-campus last-mile transportation. Passengers often struggle to find available rides (e-rickshaws, shuttles), while drivers lack visibility into passenger demand, leading to inefficiencies. This platform solves the problem by providing a centralized, real-time digital system to connect passengers with available drivers, optimizing routing, saving time, and providing a seamless digital experience.
+The IIT Roorkee campus spans a massive area, and students/staff heavily rely on e-rickshaws for internal transit. Currently, the system is informal and unstructured: passengers wait at random spots hoping an empty rickshaw passes by, and drivers wander aimlessly searching for fares. This leads to inefficiency, wasted time, uneven supply-demand matching, and cash-handling issues.
+
+**HopOn** solves this by digitizing the campus mobility network. It provides a centralized, real-time platform where passengers can broadcast their location and destination, and drivers can instantly accept these requests. The system optimizes routes, visualizes live driver locations, manages cashless payments, and provides drivers with data analytics on peak demand hours.
 
 ## 2. System Architecture
-The application uses a **Client-Server Architecture** with real-time bi-directional communication.
-- **Client (Frontend):** A React.js Single Page Application (SPA) providing separate dashboards for Passengers and Drivers.
-- **Server (Backend):** A Node.js API with Express handling HTTP REST requests, and a Socket.IO server handling real-time WebSocket events.
-- **Database:** MongoDB, providing a flexible document-based schema suited for geospatial data and dynamic ride states.
-- **Real-Time Layer:** Socket.IO pushes state updates (e.g., `ride:requested`, `ride:accepted`) instantly to clients without polling.
+HopOn follows a classic **Client-Server Architecture** utilizing the MERN stack with event-driven WebSockets.
+
+- **Client Tier (Frontend)**: Built with React.js. It manages the UI, map rendering (React Leaflet), and local state. It communicates with the backend via RESTful HTTP requests (Axios) for CRUD operations and WebSockets (Socket.IO-client) for real-time location streaming.
+- **Application Tier (Backend)**: Built with Node.js and Express.js. It acts as the central API gateway, handling business logic, authentication (JWT), payment verification, and routing.
+- **Real-Time Tier**: A Socket.IO server runs alongside Express, maintaining persistent connections with clients to broadcast live GPS coordinates and ride status updates instantly.
+- **Data Tier (Database)**: MongoDB is used to store unstructured documents (Users, Rides).
+- **External APIs**: 
+  - *Nominatim (OpenStreetMap)*: For reverse geocoding (coordinates to addresses).
+  - *OSRM (Open Source Routing Machine)*: For calculating driving polyline routes.
+  - *Razorpay*: For processing UPI payments.
 
 ## 3. Database Schema
+The database consists of two primary collections in MongoDB:
 
-### User Collection
+**User Collection**
+Stores both Passenger and Driver profiles.
 - `_id`: ObjectId
-- `name`: String
-- `email`: String (Unique)
+- `name`: String (Required)
+- `email`: String (Required, Unique)
 - `password`: String (Hashed)
 - `role`: String (Enum: 'passenger', 'driver')
-- `vehicle`: Object (For drivers: `type`, `plateNumber`)
-- `isOnline`: Boolean
-- `currentLocation`: Object (`lat`, `lng`)
-- `averageRating`: Number
+- `isOnline`: Boolean (Driver only, default false)
+- `currentLocation`: Object { lat: Number, lng: Number } (Driver only)
+- `vehicle`: Object { type: String, plateNumber: String } (Driver only)
 - `totalRides`: Number
+- `averageRating`: Number
 
-### Ride Collection
+**Ride Collection**
+Stores data for individual ride requests and journeys.
 - `_id`: ObjectId
 - `passengerId`: ObjectId (Ref: User)
-- `driverId`: ObjectId (Ref: User, Nullable)
-- `pickup`: Object (`address`, `lat`, `lng`)
-- `destination`: Object (`address`, `lat`, `lng`)
+- `driverId`: ObjectId (Ref: User)
+- `pickup`: Object { address: String, lat: Number, lng: Number }
+- `destination`: Object { address: String, lat: Number, lng: Number }
 - `status`: String (Enum: 'Requested', 'Accepted', 'In Progress', 'Completed', 'Cancelled')
+- `scheduledTime`: Date (Null if instant)
 - `fare`: Number
+- `paymentStatus`: String (Enum: 'Pending', 'Completed')
 - `rating`: Number
 - `feedback`: String
 
@@ -41,54 +58,60 @@ The application uses a **Client-Server Architecture** with real-time bi-directio
 erDiagram
     USER {
         ObjectId _id PK
-        string name
-        string email
-        string password
-        string role
-        boolean isOnline
-        object vehicle
+        String name
+        String email
+        String password
+        String role
+        Boolean isOnline
+        Object currentLocation
+        Object vehicle
+        Number totalRides
+        Number averageRating
     }
     
     RIDE {
         ObjectId _id PK
         ObjectId passengerId FK
         ObjectId driverId FK
-        string status
-        object pickup
-        object destination
+        Object pickup
+        Object destination
+        String status
+        Date scheduledTime
+        Number fare
+        String paymentStatus
+        Number rating
     }
 
-    USER ||--o{ RIDE : "Requests (as Passenger)"
-    USER ||--o{ RIDE : "Accepts (as Driver)"
+    USER ||--o{ RIDE : "requests (as passenger)"
+    USER ||--o{ RIDE : "accepts/drives (as driver)"
 ```
 
 ## 5. API Overview
 
 ### Authentication endpoints
-- `POST /api/auth/register` - Create a new user.
-- `POST /api/auth/login` - Authenticate user and return JWT.
-- `GET /api/auth/me` - Get current user profile.
+- `POST /api/auth/register`: Register a new user (hash password, return JWT).
+- `POST /api/auth/login`: Authenticate user and return JWT.
+- `POST /api/auth/google`: Authenticate or register via Google OAuth.
+- `GET /api/auth/me`: Retrieve current logged-in user profile.
+- `PUT /api/auth/profile`: Update user profile details.
 
-### Ride Management endpoints
-- `POST /api/rides` - Passenger requests a new ride.
-- `GET /api/rides` - Get all rides associated with the user.
-- `PUT /api/rides/:id/accept` - Driver accepts a requested ride.
-- `PUT /api/rides/:id/status` - Driver updates ride status.
-- `PUT /api/rides/:id/rate` - Passenger rates a completed ride.
+### Ride endpoints
+- `POST /api/rides`: Create a new ride request (or multiple for daily schedules).
+- `GET /api/rides`: Fetch all relevant rides for the logged-in user.
+- `PUT /api/rides/:id/accept`: Driver accepts a requested ride.
+- `PUT /api/rides/:id/status`: Update ride status ('In Progress', 'Completed', etc.).
+- `PUT /api/rides/:id/rate`: Submit passenger rating and feedback.
 
-### Driver Management endpoints
-- `PUT /api/drivers/availability` - Toggle driver online/offline status.
-- `GET /api/drivers/available` - List currently online drivers.
+### Driver endpoints
+- `PUT /api/drivers/availability`: Continuously update driver's GPS location and online status.
+- `GET /api/drivers/available`: Fetch a list of all currently online drivers and their locations.
 
-### WebSocket Events
-- `emit('join')` - Client joins their personal room.
-- `emit('ride:requested')` - Server broadcasts to `drivers` room.
-- `emit('ride:accepted')` - Server notifies the specific passenger.
-- `emit('ride:updated')` - Server notifies passenger of status changes.
+### Payment endpoints
+- `POST /api/payments/create-order`: Generate a Razorpay order ID.
+- `POST /api/payments/verify`: Validate the Razorpay signature to confirm payment completion.
 
 ## 6. Design Decisions
-
-1. **MongoDB over Relational DB:** Chose MongoDB for its flexible schema, making it easy to store nested objects (like `pickup` and `destination` coordinates) and handle future geospatial index expansions smoothly.
-2. **Socket.IO for Real-Time:** WebSockets were chosen over HTTP Long-Polling or SSE to ensure sub-second latency for ride requests and acceptances, crucial for a ride-hailing app's perceived performance.
-3. **Vanilla CSS with Variables:** Avoided heavy UI frameworks to maintain a clean, custom premium aesthetic. CSS variables ensure consistent theming across the application.
-4. **Atomic Updates:** Used MongoDB's `findOneAndUpdate` with query conditions (`status: 'Requested'`) to prevent race conditions when multiple drivers try to accept the same ride simultaneously.
+1. **Real-time GPS Tracking via `watchPosition`**: Instead of periodic polling, the application utilizes the browser's native `navigator.geolocation.watchPosition` API. This triggers the frontend to push location updates to the backend *only* when the device actually moves, saving battery and ensuring high accuracy on the passenger's live map.
+2. **In-Memory MongoDB for Reproducibility**: To fulfill the rubric requirement that "the solution should be reproducible" without requiring the evaluator to set up a MongoDB Atlas cluster, the backend gracefully falls back to `mongodb-memory-server`. This spins up an isolated, temporary database instance purely in RAM entirely automatically on boot.
+3. **Split-Screen Unified Auth**: The traditional multi-page `/login` and `/register` routing was abandoned in favor of a unified landing page. This reduces navigation friction; users can instantly toggle between login and signup via React state without a page reload.
+4. **Demand Analytics Bucketing**: The driver dashboard groups historical ride data into 21-hour buckets (5 AM to 1 AM) rather than raw timestamps. This aggregates the data into a visually understandable Bar Chart, allowing drivers to intuitively identify peak demand hours on campus.

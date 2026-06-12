@@ -3,8 +3,7 @@ import { AuthContext } from '../context/AuthContext';
 import { SocketContext } from '../context/SocketContext';
 import axios from 'axios';
 import { Power, MapPin, CheckCircle, XCircle, LogOut, Star, TrendingUp } from 'lucide-react';
-import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer } from 'recharts';
-
+import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer } from 'recharts';
 const DriverDashboard = () => {
   const { user, logout } = useContext(AuthContext);
   const { socket } = useContext(SocketContext);
@@ -12,10 +11,11 @@ const DriverDashboard = () => {
   const [activeRide, setActiveRide] = useState(null);
   const [rideRequests, setRideRequests] = useState([]);
   const [driverProfile, setDriverProfile] = useState(user);
-  const [history, setHistory] = useState([]);
+  const [demandData, setDemandData] = useState([]);
   const [fullHistory, setFullHistory] = useState([]);
   const [watchId, setWatchId] = useState(null);
-
+  const [todaysEarnings, setTodaysEarnings] = useState(0);
+  const [allTimeEarnings, setAllTimeEarnings] = useState(0);
   useEffect(() => {
     return () => {
       if (watchId !== null) {
@@ -23,24 +23,40 @@ const DriverDashboard = () => {
       }
     };
   }, [watchId]);
-
   useEffect(() => {
     const fetchData = async () => {
       try {
         const config = { headers: { Authorization: `Bearer ${user.token}` } };
-        // Fetch active rides
         const rideRes = await axios.get('http://localhost:5000/api/rides', config);
         const active = rideRes.data.find(r => ['Accepted', 'In Progress'].includes(r.status));
         if (active) setActiveRide(active);
-        
-        // Fetch history for analytics
         const pastRides = rideRes.data.filter(r => ['Completed', 'Cancelled'].includes(r.status));
         setFullHistory(pastRides);
-        
-        const completed = pastRides.filter(r => r.status === 'Completed').slice(0, 7);
-        setHistory(completed.map((r, i) => ({ name: `Ride ${i+1}`, fare: r.fare })));
-
-        // Fetch latest profile stats
+        const completed = pastRides.filter(r => r.status === 'Completed' || r.paymentStatus === 'Paid');
+        let allTime = 0;
+        let today = 0;
+        const todayDateStr = new Date().toDateString();
+        const buckets = Array.from({length: 21}, (_, i) => {
+           let hour = (i + 5) % 24;
+           let suffix = hour >= 12 ? 'PM' : 'AM';
+           let displayHour = hour % 12 || 12;
+           return { name: `${displayHour} ${suffix}`, rides: 0, _hour: hour };
+        });
+        rideRes.data.forEach(r => {
+           const rideHour = new Date(r.createdAt).getHours();
+           const bucket = buckets.find(b => b._hour === rideHour);
+           if (bucket) bucket.rides += 1;
+        });
+        setDemandData(buckets);
+        completed.forEach(r => {
+           const fare = r.fare || 0;
+           allTime += fare;
+           if (new Date(r.createdAt).toDateString() === todayDateStr) {
+               today += fare;
+           }
+        });
+        setAllTimeEarnings(allTime);
+        setTodaysEarnings(today);
         const profileRes = await axios.get('http://localhost:5000/api/auth/me', config);
         setDriverProfile(profileRes.data);
       } catch (err) {
@@ -49,7 +65,6 @@ const DriverDashboard = () => {
     };
     fetchData();
   }, [user.token]);
-
   useEffect(() => {
     if (socket) {
       socket.on('ride:requested', (ride) => {
@@ -66,18 +81,14 @@ const DriverDashboard = () => {
       }
     };
   }, [socket, isOnline, activeRide]);
-
   const toggleOnline = async () => {
     try {
       const config = { headers: { Authorization: `Bearer ${user.token}` } };
-      
       if (!isOnline) {
         if (!navigator.geolocation) {
           alert("Geolocation is not supported by your browser");
           return;
         }
-
-        // Request continuous real GPS location from browser
         const id = navigator.geolocation.watchPosition(
           async (position) => {
             const payload = {
@@ -101,7 +112,6 @@ const DriverDashboard = () => {
         );
         setWatchId(id);
       } else {
-        // Going offline
         if (watchId !== null) {
           navigator.geolocation.clearWatch(watchId);
           setWatchId(null);
@@ -119,7 +129,6 @@ const DriverDashboard = () => {
       alert('Failed to process availability change');
     }
   };
-
   const acceptRide = async (rideId) => {
     try {
       const config = { headers: { Authorization: `Bearer ${user.token}` } };
@@ -131,7 +140,6 @@ const DriverDashboard = () => {
       setRideRequests(prev => prev.filter(r => r._id !== rideId));
     }
   };
-
   const updateRideStatus = async (status) => {
     try {
       const config = { headers: { Authorization: `Bearer ${user.token}` } };
@@ -139,11 +147,9 @@ const DriverDashboard = () => {
       if (status === 'Completed' || status === 'Cancelled') {
         setActiveRide(null);
         setFullHistory(prev => [{...activeRide, status}, ...prev]);
-        // Refresh profile stats if completed
         if (status === 'Completed') {
            const profileRes = await axios.get('http://localhost:5000/api/auth/me', config);
            setDriverProfile(profileRes.data);
-           setHistory(prev => [...prev, { name: 'New', fare: activeRide.fare }]);
         }
       } else {
         setActiveRide(res.data);
@@ -152,14 +158,12 @@ const DriverDashboard = () => {
       alert('Failed to update status');
     }
   };
-
   const [showProfile, setShowProfile] = useState(false);
   const [profileData, setProfileData] = useState({ 
     name: user.name, 
     email: user.email, 
     vehicle: { type: user.vehicle?.type || '', plateNumber: user.vehicle?.plateNumber || '' } 
   });
-
   const handleProfileUpdate = async (e) => {
     e.preventDefault();
     try {
@@ -171,7 +175,6 @@ const DriverDashboard = () => {
       alert('Failed to update profile');
     }
   };
-
   return (
     <div className="dashboard-container">
       <div className="header">
@@ -188,8 +191,7 @@ const DriverDashboard = () => {
           <button className="btn btn-danger" onClick={logout}><LogOut size={16} style={{marginRight: 8, verticalAlign: 'middle'}} />Logout</button>
         </div>
       </div>
-
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '20px', marginBottom: '20px' }}>
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr 1fr', gap: '20px', marginBottom: '20px' }}>
          <div className="card" style={{textAlign: 'center', padding: '15px'}}>
             <Star size={30} color="var(--warning)" style={{marginBottom: '5px'}}/>
             <h3 style={{margin: 0}}>{driverProfile.averageRating ? driverProfile.averageRating.toFixed(1) : 'N/A'}</h3>
@@ -202,11 +204,15 @@ const DriverDashboard = () => {
          </div>
          <div className="card" style={{textAlign: 'center', padding: '15px'}}>
             <CheckCircle size={30} color="var(--primary)" style={{marginBottom: '5px'}}/>
-            <h3 style={{margin: 0}}>₹{history.reduce((acc, curr) => acc + (curr.fare||0), 0)}</h3>
-            <p style={{margin: 0, color: 'var(--text-muted)', fontSize: '12px'}}>Recent Earnings</p>
+            <h3 style={{margin: 0}}>₹{todaysEarnings}</h3>
+            <p style={{margin: 0, color: 'var(--text-muted)', fontSize: '12px'}}>Today's Earnings</p>
+         </div>
+         <div className="card" style={{textAlign: 'center', padding: '15px'}}>
+            <CheckCircle size={30} color="var(--secondary)" style={{marginBottom: '5px'}}/>
+            <h3 style={{margin: 0}}>₹{allTimeEarnings}</h3>
+            <p style={{margin: 0, color: 'var(--text-muted)', fontSize: '12px'}}>All-Time Earnings</p>
          </div>
       </div>
-
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px' }}>
         <div className="card">
           <h2 style={{marginTop: 0, color: 'var(--primary)'}}>Current Ride</h2>
@@ -237,7 +243,6 @@ const DriverDashboard = () => {
             </div>
           )}
         </div>
-
         <div className="card" style={{ display: 'flex', flexDirection: 'column' }}>
           <h2 style={{marginTop: 0, color: 'var(--secondary)'}}>Requests & Analytics</h2>
           {rideRequests.length > 0 ? (
@@ -259,20 +264,19 @@ const DriverDashboard = () => {
             </div>
           ) : (
              <div style={{ flex: 1, marginTop: '20px' }}>
-               <h4 style={{ color: 'var(--text-muted)', marginTop: 0 }}>Recent Earnings Chart</h4>
+               <h4 style={{ color: 'var(--text-muted)', marginTop: 0 }}>Peak Demand (5 AM - 1 AM)</h4>
                <ResponsiveContainer width="100%" height={200}>
-                 <LineChart data={history}>
-                   <XAxis dataKey="name" stroke="#bbbbbb" />
-                   <YAxis stroke="#bbbbbb" />
-                   <Tooltip contentStyle={{ backgroundColor: '#2a2a40', border: 'none', borderRadius: '8px', color: '#fff' }} />
-                   <Line type="monotone" dataKey="fare" stroke="var(--secondary)" strokeWidth={3} />
-                 </LineChart>
+                 <BarChart data={demandData}>
+                   <XAxis dataKey="name" stroke="#bbbbbb" tick={{fontSize: 10}} interval="preserveStartEnd" />
+                   <YAxis stroke="#bbbbbb" allowDecimals={false} />
+                   <Tooltip contentStyle={{ backgroundColor: '#2a2a40', border: 'none', borderRadius: '8px', color: '#fff' }} cursor={{fill: 'rgba(255,255,255,0.1)'}} />
+                   <Bar dataKey="rides" fill="var(--primary)" radius={[4, 4, 0, 0]} />
+                 </BarChart>
                </ResponsiveContainer>
               </div>
            )}
         </div>
       </div>
-
       <div className="card" style={{ marginTop: '20px' }}>
         <h2 style={{marginTop: 0, color: 'var(--secondary)'}}>Activity Table</h2>
         {fullHistory.length > 0 ? (
@@ -314,8 +318,6 @@ const DriverDashboard = () => {
           <p style={{ color: 'var(--text-muted)' }}>No completed or cancelled rides yet.</p>
         )}
       </div>
-
-      {/* Profile Modal */}
       {showProfile && (
         <div style={{position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.8)', display: 'flex', justifyContent: 'center', alignItems: 'center', zIndex: 1000}}>
           <div className="card" style={{width: '400px'}}>
@@ -348,5 +350,4 @@ const DriverDashboard = () => {
     </div>
   );
 };
-
 export default DriverDashboard;

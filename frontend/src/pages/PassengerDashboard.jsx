@@ -6,7 +6,7 @@ import { MapPin, Navigation, LogOut, Clock, Star, CreditCard, Crosshair } from '
 import { MapContainer, TileLayer, Marker, Popup, useMapEvents, Polyline } from 'react-leaflet';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
-
+import './PassengerDashboard.css';
 const rickshawIcon = new L.divIcon({
   html: `<div style="width: 70px; height: 70px; filter: drop-shadow(2px 4px 6px rgba(0,0,0,0.4));">
             <img src="/rickshaw_transparent.png" style="width: 100%; height: 100%; object-fit: contain;" />
@@ -15,16 +15,23 @@ const rickshawIcon = new L.divIcon({
   iconSize: [70, 70],
   iconAnchor: [35, 35]
 });
-import { QRCodeSVG } from 'qrcode.react';
 
-// Location Selector Hook Component
+const calculateDistance = (lat1, lon1, lat2, lon2) => {
+  if (!lat1 || !lon1 || !lat2 || !lon2) return 0;
+  const p = 0.017453292519943295;
+  const c = Math.cos;
+  const a = 0.5 - c((lat2 - lat1) * p)/2 + 
+          c(lat1 * p) * c(lat2 * p) * 
+          (1 - c((lon2 - lon1) * p))/2;
+  return 12742 * Math.asin(Math.sqrt(a));
+};
+
+import { QRCodeSVG } from 'qrcode.react';
 const LocationSelector = ({ selectingLocation, setPickupCoords, setDestCoords, setPickup, setDestination, setSelectingLocation }) => {
   useMapEvents({
     click(e) {
       if (!selectingLocation) return;
       const { lat, lng } = e.latlng;
-      
-      // Fetch address from Nominatim
       fetch(`https://nominatim.openstreetmap.org/reverse?lat=${lat}&lon=${lng}&format=json`)
         .then(res => res.json())
         .then(data => {
@@ -53,56 +60,44 @@ const LocationSelector = ({ selectingLocation, setPickupCoords, setDestCoords, s
   });
   return null;
 };
-
 const PassengerDashboard = () => {
   const { user, logout } = useContext(AuthContext);
   const { socket } = useContext(SocketContext);
-  
   const [pickup, setPickup] = useState('');
   const [destination, setDestination] = useState('');
   const [pickupCoords, setPickupCoords] = useState(null);
   const [destCoords, setDestCoords] = useState(null);
-  const [selectingLocation, setSelectingLocation] = useState(null); // 'pickup' | 'destination' | null
-  
+  const [selectingLocation, setSelectingLocation] = useState(null);
   const [scheduledTime, setScheduledTime] = useState('');
   const [isDaily, setIsDaily] = useState(false);
   const [currentRide, setCurrentRide] = useState(null);
+  const [driverRouteCoords, setDriverRouteCoords] = useState(null);
   const [loading, setLoading] = useState(false);
   const [availableDrivers, setAvailableDrivers] = useState([]);
   const [upcomingRides, setUpcomingRides] = useState([]);
   const [rideHistory, setRideHistory] = useState([]);
-
-  // Modals state
   const [showRating, setShowRating] = useState(false);
   const [showPayment, setShowPayment] = useState(false);
   const [ratingVal, setRatingVal] = useState(5);
   const [feedback, setFeedback] = useState('');
   const [completedRideData, setCompletedRideData] = useState(null);
-
   useEffect(() => {
     const fetchRides = async () => {
       try {
         const config = { headers: { Authorization: `Bearer ${user.token}` } };
         const res = await axios.get('http://localhost:5000/api/rides', config);
-        
-        // Filter history (completed/cancelled)
         const past = res.data.filter(r => ['Completed', 'Cancelled'].includes(r.status));
         setRideHistory(past);
-
-        // Filter upcoming vs active
         const now = new Date();
         const active = res.data.find(r => ['Requested', 'Accepted', 'In Progress'].includes(r.status) && (!r.scheduledTime || new Date(r.scheduledTime) <= now));
         const upcoming = res.data.filter(r => ['Requested', 'Accepted'].includes(r.status) && r.scheduledTime && new Date(r.scheduledTime) > now);
-        
         if (active) setCurrentRide(active);
         setUpcomingRides(upcoming);
-        
         const unpaidRide = res.data.find(r => r.status === 'Completed' && r.paymentStatus === 'Pending');
         if (unpaidRide) {
           setCompletedRideData(unpaidRide);
           setShowPayment(true);
         }
-
         const drvRes = await axios.get('http://localhost:5000/api/drivers/available', config);
         setAvailableDrivers(drvRes.data);
       } catch (err) {
@@ -111,7 +106,6 @@ const PassengerDashboard = () => {
     };
     fetchRides();
   }, [user.token]);
-
   useEffect(() => {
     if (socket) {
       socket.on('ride:accepted', (ride) => setCurrentRide(ride));
@@ -136,6 +130,12 @@ const PassengerDashboard = () => {
              return prev.filter(d => d._id !== driver._id);
           }
         });
+        setCurrentRide(prev => {
+          if (prev && prev.driverId && prev.driverId._id === driver._id) {
+             return { ...prev, driverId: { ...prev.driverId, currentLocation: driver.currentLocation } };
+          }
+          return prev;
+        });
       });
     }
     return () => {
@@ -146,7 +146,37 @@ const PassengerDashboard = () => {
       }
     };
   }, [socket]);
-
+  useEffect(() => {
+    const fetchRoute = async () => {
+      if (currentRide && currentRide.driverId && currentRide.driverId.currentLocation) {
+        const { lat: driverLat, lng: driverLng } = currentRide.driverId.currentLocation;
+        let targetLat, targetLng;
+        if (currentRide.status === 'Accepted' && currentRide.pickup) {
+           targetLat = currentRide.pickup.lat;
+           targetLng = currentRide.pickup.lng;
+        } else if (currentRide.status === 'In Progress' && currentRide.destination) {
+           targetLat = currentRide.destination.lat;
+           targetLng = currentRide.destination.lng;
+        } else {
+           setDriverRouteCoords(null);
+           return;
+        }
+        try {
+          const url = `https://router.project-osrm.org/route/v1/driving/${driverLng},${driverLat};${targetLng},${targetLat}?overview=full&geometries=geojson`;
+          const response = await axios.get(url);
+          if (response.data.routes && response.data.routes.length > 0) {
+            const coords = response.data.routes[0].geometry.coordinates.map(c => [c[1], c[0]]);
+            setDriverRouteCoords(coords);
+          }
+        } catch (error) {
+          console.error("Failed to fetch OSRM route:", error);
+        }
+      } else {
+        setDriverRouteCoords(null);
+      }
+    };
+    fetchRoute();
+  }, [currentRide?.driverId?.currentLocation?.lat, currentRide?.driverId?.currentLocation?.lng, currentRide?.pickup?.lat, currentRide?.pickup?.lng, currentRide?.destination?.lat, currentRide?.destination?.lng, currentRide?.status]);
   const handleRequestRide = async (e) => {
     e.preventDefault();
     if (!pickupCoords || !destCoords) {
@@ -163,7 +193,6 @@ const PassengerDashboard = () => {
         isDaily
       };
       const res = await axios.post('http://localhost:5000/api/rides', payload, config);
-      
       if (payload.scheduledTime && new Date(payload.scheduledTime) > new Date()) {
         if (Array.isArray(res.data)) {
            setUpcomingRides(prev => [...prev, ...res.data]);
@@ -182,22 +211,53 @@ const PassengerDashboard = () => {
     }
     setLoading(false);
   };
-
   const handlePayment = async () => {
     try {
       const config = { headers: { Authorization: `Bearer ${user.token}` } };
-      await axios.post('http://localhost:5000/api/payments/process', {
-        rideId: completedRideData._id,
-        amount: completedRideData.fare,
-        method: 'UPI'
+      const { data } = await axios.post('http://localhost:5000/api/payments/create-order', {
+        rideId: completedRideData._id
       }, config);
-      setShowPayment(false);
-      setShowRating(true);
+      if (!data.order || !data.order.id) {
+          return alert('Could not initiate payment');
+      }
+      const options = {
+        key: data.key_id, 
+        amount: data.order.amount, 
+        currency: "INR",
+        name: "Campus Mobility",
+        description: "Ride Fare",
+        order_id: data.order.id, 
+        handler: async function (response) {
+          try {
+            await axios.post('http://localhost:5000/api/payments/verify', {
+              razorpay_payment_id: response.razorpay_payment_id,
+              razorpay_order_id: response.razorpay_order_id,
+              razorpay_signature: response.razorpay_signature,
+              rideId: completedRideData._id
+            }, config);
+            setShowPayment(false);
+            setShowRating(true);
+          } catch (verifyErr) {
+            alert('Payment verification failed');
+          }
+        },
+        prefill: {
+          name: user.name,
+          contact: "9999999999"
+        },
+        theme: {
+          color: "#0ea5e9"
+        }
+      };
+      const rzp1 = new window.Razorpay(options);
+      rzp1.on('payment.failed', function (response){
+          alert("Payment failed: " + response.error.description);
+      });
+      rzp1.open();
     } catch (err) {
-      alert('Payment failed');
+      alert(err.response?.data?.message || 'Payment initiation failed');
     }
   };
-
   const handleRatingSubmit = async () => {
     try {
       const config = { headers: { Authorization: `Bearer ${user.token}` } };
@@ -212,11 +272,9 @@ const PassengerDashboard = () => {
       alert('Failed to submit rating');
     }
   };
-
   const [showProfile, setShowProfile] = useState(false);
   const [showProfileMenu, setShowProfileMenu] = useState(false);
   const [profileData, setProfileData] = useState({ name: user.name, email: user.email });
-
   const handleProfileUpdate = async (e) => {
     e.preventDefault();
     try {
@@ -228,43 +286,34 @@ const PassengerDashboard = () => {
       alert('Failed to update profile');
     }
   };
-
   return (
     <>
-      {/* Top Navbar Strip */}
-      <div style={{ padding: '15px 30px', background: 'var(--bg-card)', borderBottom: '1px solid rgba(255,255,255,0.1)', display: 'flex', alignItems: 'center', justifyContent: 'space-between', zIndex: 1001, position: 'relative' }}>
-        <h2 style={{ margin: 0, color: 'var(--primary)', letterSpacing: '1px' }}>Company Name</h2>
-        
-        {/* Profile Button */}
-        <div style={{ position: 'relative' }}>
-          <div 
-            onClick={() => setShowProfileMenu(!showProfileMenu)}
-            style={{ width: '45px', height: '45px', borderRadius: '50%', background: 'var(--primary)', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', border: '2px solid rgba(255,255,255,0.2)' }}
-          >
-            <span style={{ fontSize: '18px', fontWeight: 'bold', color: 'white' }}>{user.name.charAt(0).toUpperCase()}</span>
+      <div className="passenger-navbar">
+        <div className="passenger-navbar-logo">
+          <div className="passenger-navbar-logo-icon">
+            <MapPin size={17} color="#fff" />
           </div>
-
+          <h2>HopOn</h2>
+        </div>
+        <div style={{ position: 'relative' }}>
+          <div className="passenger-avatar" onClick={() => setShowProfileMenu(!showProfileMenu)}>
+            {user.name.charAt(0).toUpperCase()}
+          </div>
           {showProfileMenu && (
-            <div style={{ position: 'absolute', top: '55px', right: 0, background: 'var(--bg-card)', padding: '15px', borderRadius: '10px', boxShadow: '0 8px 24px rgba(0,0,0,0.8)', border: '1px solid rgba(255,255,255,0.1)', minWidth: '150px' }}>
-               <p style={{ margin: '0 0 10px 0', fontWeight: 'bold', textAlign: 'center' }}>{user.name}</p>
-               <button className="btn btn-secondary" style={{ width: '100%', marginBottom: '10px' }} onClick={() => { setShowProfileMenu(false); setShowProfile(true); }}>Edit Profile</button>
-               <button className="btn btn-danger" style={{ width: '100%' }} onClick={logout}><LogOut size={16} style={{marginRight: 8, verticalAlign: 'middle'}} />Logout</button>
+            <div className="passenger-dropdown">
+               <p className="passenger-dropdown-name">{user.name}</p>
+               <button className="btn btn-secondary" style={{ width: '100%', marginBottom: '8px' }} onClick={() => { setShowProfileMenu(false); setShowProfile(true); }}>Edit Profile</button>
+               <button className="btn btn-danger" style={{ width: '100%' }} onClick={logout}><LogOut size={16} style={{marginRight: 6, verticalAlign: 'middle'}} />Logout</button>
             </div>
           )}
         </div>
       </div>
-
-      {/* 1. Full Bleed Map at the very top */}
-      <div style={{ position: 'relative', width: '100%', height: '500px', borderBottom: '1px solid rgba(255,255,255,0.05)', background: 'var(--bg-card)' }}>
-        
-
-
+      <div className="passenger-map-container">
         {selectingLocation && (
-             <div style={{position: 'absolute', top: '20px', left: '50%', transform: 'translateX(-50%)', zIndex: 1000, background: 'var(--warning)', color: '#000', padding: '10px 20px', borderRadius: '30px', fontWeight: 'bold', boxShadow: '0 4px 12px rgba(0,0,0,0.5)'}}>
+             <div className="passenger-map-toast">
                 Click map to select {selectingLocation}
              </div>
         )}
-
         <MapContainer center={[29.8649, 77.8966]} zoom={14} style={{ height: '100%', width: '100%' }}>
           <TileLayer url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" />
           <LocationSelector 
@@ -275,7 +324,6 @@ const PassengerDashboard = () => {
             setDestination={setDestination} 
             setSelectingLocation={setSelectingLocation}
           />
-          
           {currentRide && (
             <>
               <Marker position={[currentRide.pickup.lat, currentRide.pickup.lng]}>
@@ -284,6 +332,19 @@ const PassengerDashboard = () => {
               <Marker position={[currentRide.destination.lat, currentRide.destination.lng]}>
                 <Popup>Dropoff: {currentRide.destination.address}</Popup>
               </Marker>
+              {currentRide.driverId?.currentLocation && (
+                <Marker position={[currentRide.driverId.currentLocation.lat, currentRide.driverId.currentLocation.lng]} icon={rickshawIcon}>
+                  <Popup>Assigned Driver</Popup>
+                </Marker>
+              )}
+              {driverRouteCoords && (
+                <Polyline 
+                  positions={driverRouteCoords} 
+                  color="var(--success)" 
+                  weight={5} 
+                  opacity={0.9} 
+                />
+              )}
               <Polyline 
                 positions={[
                   [currentRide.pickup.lat, currentRide.pickup.lng],
@@ -291,23 +352,22 @@ const PassengerDashboard = () => {
                 ]} 
                 color="var(--primary)" 
                 weight={4} 
-                opacity={0.7} 
+                opacity={0.5} 
                 dashArray="10, 10" 
               />
             </>
           )}
-
-          {!currentRide && pickupCoords && (
+          {(!currentRide || currentRide.status === 'Requested') && pickupCoords && (
              <Marker position={[pickupCoords.lat, pickupCoords.lng]}>
                <Popup>Selected Pickup</Popup>
              </Marker>
           )}
-          {!currentRide && destCoords && (
+          {(!currentRide || currentRide.status === 'Requested') && destCoords && (
              <Marker position={[destCoords.lat, destCoords.lng]}>
                <Popup>Selected Destination</Popup>
              </Marker>
           )}
-          {!currentRide && pickupCoords && destCoords && (
+          {(!currentRide || currentRide.status === 'Requested') && pickupCoords && destCoords && (
               <Polyline 
                 positions={[
                   [pickupCoords.lat, pickupCoords.lng],
@@ -319,8 +379,7 @@ const PassengerDashboard = () => {
                 dashArray="5, 10" 
               />
           )}
-
-          {!currentRide && availableDrivers.map(d => d.currentLocation && (
+          {(!currentRide || currentRide.status === 'Requested') && availableDrivers.map(d => d.currentLocation && (
             <Marker key={d._id} position={[d.currentLocation.lat, d.currentLocation.lng]} icon={rickshawIcon}>
                 <Popup>
                 <strong>Available Driver: {d.name}</strong><br/>
@@ -329,30 +388,27 @@ const PassengerDashboard = () => {
               </Popup>
             </Marker>
           ))}
-
         </MapContainer>
       </div>
-
       <div className="dashboard-container">
-        {/* Request a Ride Section */}
-        <div className="card" style={{ marginTop: '20px' }}>
-          <h2 style={{marginTop: 0, color: 'var(--primary)'}}><Navigation size={20} style={{marginRight: 8, verticalAlign: 'middle'}}/>Request a Ride</h2>
-          
+        <div className="card passenger-ride-card" style={{ marginTop: '20px' }}>
+          <h2><Navigation size={18} />Request a Ride</h2>
           {currentRide ? (
-            <div style={{ padding: '20px', background: 'rgba(255,255,255,0.05)', borderRadius: '10px' }}>
+            <div className="passenger-ride-status">
               <h3>Current Ride Status</h3>
               <span className={`status-badge status-${currentRide.status.toLowerCase().replace(' ', '')}`}>
                 {currentRide.status}
               </span>
               <div style={{ margin: '15px 0' }}>
-                <p><strong>From:</strong> {currentRide.pickup.address}</p>
-                <p><strong>To:</strong> {currentRide.destination.address}</p>
-                <p><strong>Fare:</strong> ₹{currentRide.fare}</p>
+                <p className="passenger-ride-detail"><strong>From:</strong> {currentRide.pickup.address}</p>
+                <p className="passenger-ride-detail"><strong>To:</strong> {currentRide.destination.address}</p>
+                <p className="passenger-ride-detail"><strong>Fare:</strong> ₹{currentRide.fare}</p>
+                <p className="passenger-ride-detail"><strong>Distance:</strong> {calculateDistance(currentRide.pickup.lat, currentRide.pickup.lng, currentRide.destination.lat, currentRide.destination.lng).toFixed(2)} km</p>
                 {currentRide.scheduledTime && (
                   <p><strong>Scheduled:</strong> {new Date(currentRide.scheduledTime).toLocaleString()}</p>
                 )}
                 {currentRide.driverId && (
-                  <div style={{ marginTop: '10px', padding: '10px', background: 'rgba(0,0,0,0.2)', borderRadius: '8px' }}>
+                  <div className="passenger-driver-info">
                     <p style={{margin: '0 0 5px 0'}}><strong>Driver:</strong> {currentRide.driverId.name}</p>
                     <p style={{margin: 0}}><strong>Vehicle:</strong> {currentRide.driverId.vehicle?.plateNumber}</p>
                   </div>
@@ -379,12 +435,12 @@ const PassengerDashboard = () => {
             </div>
           ) : (
             <form onSubmit={handleRequestRide}>
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '15px' }}>
+              <div className="passenger-form-row">
                 <div className="form-group" style={{ marginBottom: 0 }}>
                   <label>Pickup Location</label>
-                  <div style={{display: 'flex', alignItems: 'center', background: 'rgba(0,0,0,0.2)', borderRadius: '8px', border: '1px solid rgba(255,255,255,0.1)'}}>
-                    <MapPin size={20} style={{marginLeft: '10px', color: 'var(--text-muted)'}}/>
-                    <input type="text" value={pickup} onChange={(e) => setPickup(e.target.value)} required placeholder="Select on map or type" style={{border: 'none', background: 'transparent', flex: 1}}/>
+                  <div className="passenger-input-wrapper">
+                    <MapPin size={18} className="passenger-input-icon" />
+                    <input type="text" value={pickup} onChange={(e) => setPickup(e.target.value)} required placeholder="Select on map" />
                     <button type="button" className={`btn ${selectingLocation === 'pickup' ? 'btn-success' : 'btn-secondary'}`} style={{padding: '5px 10px', margin: '5px'}} onClick={() => setSelectingLocation('pickup')}>
                       <Crosshair size={16}/>
                     </button>
@@ -392,9 +448,9 @@ const PassengerDashboard = () => {
                 </div>
                 <div className="form-group" style={{ marginBottom: 0 }}>
                   <label>Destination</label>
-                  <div style={{display: 'flex', alignItems: 'center', background: 'rgba(0,0,0,0.2)', borderRadius: '8px', border: '1px solid rgba(255,255,255,0.1)'}}>
-                    <Navigation size={20} style={{marginLeft: '10px', color: 'var(--text-muted)'}}/>
-                    <input type="text" value={destination} onChange={(e) => setDestination(e.target.value)} required placeholder="Select on map or type" style={{border: 'none', background: 'transparent', flex: 1}}/>
+                  <div className="passenger-input-wrapper">
+                    <Navigation size={18} className="passenger-input-icon" />
+                    <input type="text" value={destination} onChange={(e) => setDestination(e.target.value)} required placeholder="Select on map" />
                     <button type="button" className={`btn ${selectingLocation === 'destination' ? 'btn-success' : 'btn-secondary'}`} style={{padding: '5px 10px', margin: '5px'}} onClick={() => setSelectingLocation('destination')}>
                       <Crosshair size={16}/>
                     </button>
@@ -402,9 +458,9 @@ const PassengerDashboard = () => {
                 </div>
                 <div className="form-group" style={{ marginBottom: 0 }}>
                   <label>Schedule Time (Optional)</label>
-                  <div style={{display: 'flex', alignItems: 'center', background: 'rgba(0,0,0,0.2)', borderRadius: '8px', border: '1px solid rgba(255,255,255,0.1)'}}>
-                    <Clock size={20} style={{marginLeft: '10px', color: 'var(--text-muted)'}}/>
-                    <input type="datetime-local" value={scheduledTime} onChange={(e) => setScheduledTime(e.target.value)} style={{border: 'none', background: 'transparent'}}/>
+                  <div className="passenger-input-wrapper">
+                    <Clock size={18} className="passenger-input-icon" />
+                    <input type="datetime-local" value={scheduledTime} onChange={(e) => setScheduledTime(e.target.value)} />
                   </div>
                   {scheduledTime && (
                     <div style={{marginTop: '10px', display: 'flex', alignItems: 'center'}}>
@@ -420,14 +476,13 @@ const PassengerDashboard = () => {
             </form>
           )}
         </div>
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 2fr', gap: '20px', marginTop: '20px' }}>
-        {/* Upcoming Bookings */}
+        <div className="passenger-section-grid">
         <div className="card">
-          <h2 style={{marginTop: 0, color: 'var(--secondary)'}}><Clock size={20} style={{marginRight: 8, verticalAlign: 'middle'}}/>Upcoming Bookings</h2>
+          <h2 className="passenger-section-title"><Clock size={18} />Upcoming Bookings</h2>
           {upcomingRides.length > 0 ? (
              <div style={{ maxHeight: '300px', overflowY: 'auto' }}>
                {upcomingRides.map(ride => (
-                 <div key={ride._id} style={{ background: 'rgba(255,255,255,0.05)', padding: '10px', borderRadius: '8px', marginBottom: '10px' }}>
+                 <div key={ride._id} className="passenger-booking-item">
                    <p style={{ margin: '0 0 5px 0', fontSize: '14px', color: 'var(--warning)' }}><strong>{new Date(ride.scheduledTime).toLocaleString()}</strong></p>
                    <p style={{ margin: '0 0 5px 0', fontSize: '14px' }}>From: {ride.pickup.address.split(',')[0]}</p>
                    <p style={{ margin: '0 0 5px 0', fontSize: '14px' }}>To: {ride.destination.address.split(',')[0]}</p>
@@ -436,13 +491,11 @@ const PassengerDashboard = () => {
                ))}
              </div>
           ) : (
-             <p style={{ color: 'var(--text-muted)', textAlign: 'center', marginTop: '20px' }}>No upcoming bookings.</p>
+             <p className="passenger-empty-state">No upcoming bookings.</p>
           )}
         </div>
-
-        {/* Payment & Ride History */}
         <div className="card">
-          <h2 style={{marginTop: 0, color: 'var(--secondary)'}}><CreditCard size={20} style={{marginRight: 8, verticalAlign: 'middle'}}/>Activity & Payments History</h2>
+          <h2 className="passenger-section-title"><CreditCard size={18} />Activity & Payments</h2>
           {rideHistory.length > 0 ? (
             <div style={{ overflowX: 'auto', maxHeight: '300px' }}>
               <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left' }}>
@@ -479,15 +532,13 @@ const PassengerDashboard = () => {
               </table>
             </div>
           ) : (
-            <p style={{ color: 'var(--text-muted)', textAlign: 'center', marginTop: '20px' }}>No past activity.</p>
+            <p className="passenger-empty-state">No past activity.</p>
           )}
         </div>
       </div>
-
-      {/* Payment Modal */}
       {showPayment && completedRideData && (
-        <div style={{position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.8)', display: 'flex', justifyContent: 'center', alignItems: 'center', zIndex: 1000}}>
-          <div className="card" style={{width: '400px', textAlign: 'center'}}>
+        <div className="passenger-modal-overlay">
+          <div className="passenger-modal-card">
             <CreditCard size={40} color="var(--primary)" style={{marginBottom: '10px'}}/>
             <h2 style={{margin: '0 0 10px 0'}}>Payment Due</h2>
             <p>Your ride is completed. Please pay the driver.</p>
@@ -496,16 +547,14 @@ const PassengerDashboard = () => {
                <QRCodeSVG value={`upi://pay?pa=driver@upi&pn=CampusDriver&am=${completedRideData.fare}`} size={150} />
             </div>
             <button className="btn btn-primary" style={{width: '100%'}} onClick={handlePayment}>
-              Simulate UPI Payment Success
+              Pay with Razorpay (UPI)
             </button>
           </div>
         </div>
       )}
-
-      {/* Rating Modal */}
       {showRating && (
-        <div style={{position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.8)', display: 'flex', justifyContent: 'center', alignItems: 'center', zIndex: 1000}}>
-          <div className="card" style={{width: '400px', textAlign: 'center'}}>
+        <div className="passenger-modal-overlay">
+          <div className="passenger-modal-card">
             <Star size={40} color="var(--warning)" style={{marginBottom: '10px'}}/>
             <h2 style={{margin: '0 0 10px 0'}}>Rate your Ride</h2>
             <div style={{display: 'flex', justifyContent: 'center', gap: '10px', margin: '20px 0'}}>
@@ -532,11 +581,9 @@ const PassengerDashboard = () => {
           </div>
         </div>
       )}
-
-      {/* Profile Modal */}
       {showProfile && (
-        <div style={{position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.8)', display: 'flex', justifyContent: 'center', alignItems: 'center', zIndex: 1000}}>
-          <div className="card" style={{width: '400px'}}>
+        <div className="passenger-modal-overlay">
+          <div className="passenger-modal-card" style={{textAlign: 'left'}}>
             <h2 style={{marginTop: 0}}>Edit Profile</h2>
             <form onSubmit={handleProfileUpdate}>
               <div className="form-group" style={{marginBottom: '10px'}}>
@@ -559,5 +606,4 @@ const PassengerDashboard = () => {
     </>
   );
 };
-
 export default PassengerDashboard;

@@ -5,7 +5,7 @@ let io;
 exports.initSockets = (server) => {
   io = new Server(server, {
     cors: {
-      origin: '*', // For development
+      origin: '*',
       methods: ['GET', 'POST']
     }
   });
@@ -13,17 +13,17 @@ exports.initSockets = (server) => {
   io.on('connection', (socket) => {
     console.log('New client connected', socket.id);
 
-    // Join room based on user ID or role
+
     socket.on('join', ({ userId, role }) => {
-      socket.join(userId); // Join personal room
+      socket.join(userId);
       if (role === 'driver') {
-        socket.join('drivers'); // Drivers join a common room for broadcasts
+        socket.join('drivers');
       }
       console.log(`User ${userId} (${role}) joined rooms`);
     });
 
     socket.on('driver:locationUpdate', ({ userId, location }) => {
-      // Broadcast location to passengers tracking this driver
+
       io.emit(`driverLocation:${userId}`, location);
     });
 
